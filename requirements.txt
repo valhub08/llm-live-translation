@@ -1,0 +1,44 @@
+# LLM Live Translation Test Project
+# Python 3.10+ required
+
+# WebSocket Communication
+websockets>=12.0
+
+# Audio Processing
+pyaudio>=0.2.14
+pydub>=0.25.1
+sounddevice>=0.4.6
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# Data Processing & Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Async Programming
+asyncio-mqtt>=0.16.1
+
+# HTTP Requests (for REST APIs)
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# JSON Processing
+json5>=0.9.14
+
+# Logging
+colorlog>=6.8.0
+
+# Optional: For audio format conversion
+ffmpeg-python>=0.2.0
+
+# Optional: For evaluation metrics
+jiwer>=3.0.0  # WER calculation
+sacrebleu>=2.3.1  # BLEU score
+
+# Optional: For visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Optional: For progress bars
+tqdm>=4.66.0

@@ -1,0 +1,45 @@
+# API Keys and Secrets
+.env
+config/.env
+*.key
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test Results & Audio
+results/
+test_audio/
+ground_truth/
+results_summary.md
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+
+# Hidden files
+.DS_Store
+.env
