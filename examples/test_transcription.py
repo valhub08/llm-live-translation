@@ -21,6 +21,7 @@ from pathlib import Path
 from datetime import datetime
 import argparse
 import logging
+import time
 
 # 기본 로깅 설정
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
@@ -76,6 +77,10 @@ class TranscriptionTester:
         # 전사 결과 저장
         self.transcriptions = []
         self.translations = []
+        
+        # 성능 측정용
+        self.test_start_time = None
+        self.first_response_time = None
 
     def setup(self):
         """LLM 클라이언트 및 오디오 소스 설정"""
@@ -161,6 +166,7 @@ class TranscriptionTester:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] LLM API 연결 중...")
             await self.client.connect()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Done] 연결 성공\n")
+            self.test_start_time = time.time()
 
             # 오디오 캡처 및 전송 시작
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 오디오 전송 시작...")
@@ -209,6 +215,12 @@ class TranscriptionTester:
             # 결과 출력
             self.print_results()
 
+    def _elapsed_seconds(self) -> float:
+        """테스트 시작 후 경과 시간(초)"""
+        if self.test_start_time is None:
+            return 0.0
+        return time.time() - self.test_start_time
+
     def on_audio_chunk(self, chunk: bytes, metadata: dict):
         """오디오 청크 수신 시 LLM으로 전송"""
         # LLM 클라이언트로 전송 (비동기)
@@ -218,26 +230,22 @@ class TranscriptionTester:
         if metadata['chunk_index'] % 10 == 0:
             print(f"  📤 청크 {metadata['chunk_index']}: {metadata['elapsed_seconds']:.1f}초")
 
-    def on_transcription(self, text: str, metadata: dict):
+    def on_transcription(self, text: str, metadata: dict = None):
         """전사 결과 수신"""
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        print(f"\n[{timestamp}] 📝 전사: {text}")
-
+        print(f"  [Speak] {text}")
         self.transcriptions.append({
-            'timestamp': timestamp,
-            'text': text,
-            'metadata': metadata
+            'timestamp': self._elapsed_seconds(),
+            'text': text
         })
 
-    def on_translation(self, text: str, metadata: dict):
+    def on_translation(self, text: str, metadata: dict = None):
         """번역 결과 수신"""
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        print(f"[{timestamp}] 🌍 번역: {text}")
-
+        print(f"  [Trans] {text}")
+        if self.first_response_time is None:
+            self.first_response_time = time.time()
         self.translations.append({
-            'timestamp': timestamp,
-            'text': text,
-            'metadata': metadata
+            'timestamp': self._elapsed_seconds(),
+            'text': text
         })
 
     def on_error(self, error: Exception, context: dict):

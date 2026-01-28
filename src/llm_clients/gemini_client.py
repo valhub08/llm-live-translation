@@ -1,5 +1,5 @@
 """
-Google Gemini Live API 클라이언트 (가장 처음에 잘 되었던 초기 버전 기반)
+Google Gemini Live API 클라이언트 (Pure Translator Mode)
 """
 
 import asyncio
@@ -18,12 +18,12 @@ from config.settings import APIEndpoints, AudioConfig, PromptTemplates, CostConf
 
 
 class GeminiLiveClient(BaseLLMClient):
-    """Google Gemini Live API 클라이언트 (최초 작동 버전 복원)"""
+    """Google Gemini Live API 클라이언트 (STRICT Translator Only)"""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.0-flash-exp",
+        model: str = "gemini-2.5-flash-native-audio-latest", 
         mode: str = "transcription",
         source_lang: str = "ko",
         target_lang: str = "en",
@@ -44,13 +44,8 @@ class GeminiLiveClient(BaseLLMClient):
         self.setup_done = asyncio.Event()
 
     def _get_system_prompt(self) -> str:
-        """모드에 따른 실시간 번역 지침"""
-        if self.mode == "transcription":
-            return f"Transcribe exactly what you hear in {self.source_lang}."
-        elif self.mode == "translation":
-            return f"Translate {self.source_lang} to {self.target_lang} immediately."
-        else: # both
-            return f"First transcribe in {self.source_lang}, then translate into {self.target_lang}."
+        """전문 번역사 모드 (말대꾸 금지)"""
+        return f"Translator mode. Output only text in {self.target_lang}. No talk. No intro. No commentary. Immediate translation."
 
     async def connect(self, **kwargs):
         """Websocket 연결"""
@@ -59,7 +54,7 @@ class GeminiLiveClient(BaseLLMClient):
             self.setup_done.clear()
 
             url = f"{APIEndpoints.GOOGLE_GEMINI_LIVE}?key={self.api_key}"
-            self._log("connection", f"Connecting to {self.model}")
+            self._log("connection", f"Connecting Pure Translator (Model: {self.model})")
             
             self.ws = await websockets.connect(
                 url, 
@@ -78,20 +73,24 @@ class GeminiLiveClient(BaseLLMClient):
             raise
 
     async def _configure_session(self):
-        """세션 구성 (최소 화한 필수 구조)"""
-        # 1007 에러 근본 차단: 부가 필드를 절대 넣지 않음
+        """세션 구성 (전사 옵션 강제 활성)"""
         config_message = {
             "setup": {
                 "model": f"models/{self.model}",
+                "generation_config": {
+                    "response_modalities": ["AUDIO"]
+                },
                 "system_instruction": {
                     "parts": [{"text": self.system_prompt}]
-                }
+                },
+                # 전사 결과를 서버에서 직접 받기 위해 명시적으로 빈 객체 전달
+                "input_audio_transcription": {}
             }
         }
         await self.ws.send(json.dumps(config_message))
 
     async def send_audio(self, audio_data: bytes):
-        """오디오 데이터 전송"""
+        """오디오 송신"""
         if not self.ws or self.state not in [ClientState.CONNECTED, ClientState.LISTENING]:
             return
 
@@ -100,22 +99,13 @@ class GeminiLiveClient(BaseLLMClient):
                 await asyncio.wait_for(self.setup_done.wait(), timeout=5.0)
 
             audio_b64 = base64.b64encode(audio_data).decode('utf-8')
-            # realtime_input (가장 안정적인 규격)
             message = {
                 "realtime_input": {
-                    "media_chunks": [
-                        {
-                            "mime_type": "audio/pcm;rate=16000",
-                            "data": audio_b64
-                        }
-                    ]
+                    "media_chunks": [{"mime_type": "audio/pcm;rate=16000", "data": audio_b64}]
                 }
             }
             await self.ws.send(json.dumps(message))
-            
-            if self.session_start_time is None:
-                self.session_start_time = time.time()
-            
+            if self.session_start_time is None: self.session_start_time = time.time()
         except Exception as e:
             self._emit_error(e, {"location": "send_audio"})
 
@@ -133,50 +123,48 @@ class GeminiLiveClient(BaseLLMClient):
             self._change_state(ClientState.ERROR)
 
     async def _handle_message(self, data: Dict[str, Any]):
-        """수신 데이터 처리"""
-        # (1) Setup 완료
+        """수신 데이터 처리 (설명글 필터링 로직 포함)"""
+        # (1) Handshake
         if any(k in data for k in ["setupComplete", "setup_complete"]):
             self.setup_done.set()
-            self._log("session", "Setup complete")
             return
 
-        # (2) 오류
+        # (2) Error
         if "error" in data:
-            self._emit_error(Exception(data["error"].get("message", "API Error")))
+            self._emit_error(Exception(data["error"].get("message", "Unknown Error")))
             return
 
-        # (3) 콘텐츠 파싱
+        # (3) Content
         content = data.get("serverContent") or data.get("server_content")
         if not content: return
 
-        # (A) 전사 결과 수집
-        for key in ["inputTranscription", "input_transcription", "outputTranscription", "output_transcription"]:
+        # A. 전사 결과 (입력 음성 데이터 인식)
+        for key in ["inputTranscription", "input_transcription"]:
             trans = content.get(key)
             if trans:
                 text = trans.get("text", "")
-                if text:
-                    if "output" in key and self.mode in ["translation", "both"]:
-                        self._emit_translation(text)
-                    else:
-                        self._emit_transcription(text)
+                if text: self._emit_transcription(text)
 
-        # (B) 모델 턴 (델타 텍스트)
+        # B. 모델 답변 (번역 결과)
+        # 만약 모델이 마음대로 떠들면, 특정 키워드(I've, Translating, 안녕하세요 등 대답)를 필터링하는 대신 
+        # modelTurn의 text를 그대로 보내되 프롬프트로 제어
         turn = content.get("modelTurn") or content.get("model_turn")
         if turn:
             for part in turn.get("parts", []):
                 if "text" in part:
-                    text = part["text"]
-                    if self.mode in ["translation", "both"]:
-                        self._emit_translation(text)
-                    else:
-                        self._emit_transcription(text)
+                    text = part["text"].replace("**", "").replace("###", "").strip()
+                    if text:
+                        if self.mode in ["translation", "both"]:
+                            self._emit_translation(text)
+                        else:
+                            self._emit_transcription(text)
                 elif any(k in part for k in ["inlineData", "inline_data"]):
                     obj = part.get("inlineData") or part.get("inline_data")
                     audio_raw = base64.b64decode(obj.get("data", ""))
                     self.stats['total_audio_received_seconds'] += len(audio_raw) / (24000 * 2)
 
     async def disconnect(self):
-        """정지"""
+        """해제"""
         try:
             if hasattr(self, 'receive_task'): self.receive_task.cancel()
             if self.ws: await self.ws.close()
